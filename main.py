@@ -19,11 +19,75 @@ MAGSAC++, a fast, reliable and accurate robust estimator
 
 
 from scipy.linalg import expm
-from GeometricEstimator import *
+# from GeometricEstimator import *
 from Drawer3D import *
 import plotly.graph_objs as go
 import plotly.io as pio
-# In geometric estimator file:
+import numpy as np
+import random
+import cv2
+
+
+
+def quaternion2Matrix(q):  # (w,x,y,z)
+    R = np.array(
+        [[q[0] ** 2 + q[1] ** 2 - q[2] ** 2 - q[3] ** 2, 2 * (q[1] * q[2] - q[0] * q[3]),
+          2 * (q[1] * q[3] + q[0] * q[2])],
+         [2 * (q[2] * q[1] + q[0] * q[3]), q[0] ** 2 - q[1] ** 2 + q[2] ** 2 - q[3] ** 2,
+          2 * (q[2] * q[3] - q[0] * q[1])],
+         [2 * (q[3] * q[1] - q[0] * q[2]), 2 * (q[3] * q[2] + q[0] * q[1]),
+          q[0] ** 2 - q[1] ** 2 - q[2] ** 2 + q[3] ** 2]], dtype="object")
+    return R
+
+
+def triangulateFrom2View(x1, x2, K_c1, K_c2, T_c2_c1):
+    """
+    Triangulate the matches matched points between two views, the relative
+    movement between the cameras and the intrinsic parameters are known.
+
+    -input:
+        x1: 2xn matrix -> n 2D points in the image 1. Each i index is matched with the same indes in x2.
+        x2: 2xn matrix -> n 2D points in the image 2. Each i index is matched with the same indes in x1.
+        K_c1: 3x3 matrix -> Camera 1 calibration matrix.
+        K_c2: 3x3 matrix -> Camera 2 calibration matrix.
+        T_c2_c1 : 4x4 matrix -> Relative movenment between the camera 2 and camera 1.
+    -output:
+        X_3D: nx4 matrix -> n 3D points in the reference system of the camera 1.
+    """
+
+    P_c1 = np.hstack((K_c1, np.zeros((3, 1))))
+
+    P_c2 = K_c2 @ np.eye(3, 4) @ T_c2_c1
+
+    num_matches = x1.shape[1]
+
+    v_p11 = P_c1[0, :]
+    v_p12 = P_c1[1, :]
+    v_p13 = P_c1[2, :]
+    v_p21 = P_c2[0, :]
+    v_p22 = P_c2[1, :]
+    v_p23 = P_c2[2, :]
+
+    X_3D = np.zeros((num_matches, 4))
+    for i in range(num_matches):
+        A = np.zeros((4, 4))
+
+        u_1 = x1[0, i]
+        v_1 = x1[1, i]
+        A[0, :] = u_1 * v_p13 - v_p11
+        A[1, :] = v_1 * v_p13 - v_p12
+
+        u_2 = x2[0, i]
+        v_2 = x2[1, i]
+        A[2, :] = u_2 * v_p23 - v_p21
+        A[3, :] = v_2 * v_p23 - v_p22
+
+        _, _, Vt = np.linalg.svd(A)
+        X_3D[i, :] = Vt[-1, :]
+        X_3D[i, :] = X_3D[i, :] / X_3D[i, 3]
+
+    return X_3D
+
 
 def main():
     np.set_printoptions(precision=4, linewidth=1024, suppress=True)
