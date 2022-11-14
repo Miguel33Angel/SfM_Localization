@@ -4,22 +4,17 @@
 # // Version     : V0.0
 # // Copyright   : Your copyright notice
 # // Description : Localization with monocular camera.
+# //============================================================================
 """
 Resources that will be usefull:
-https://arxiv.org/pdf/2003.01587.pdf -> Comparisons ofa keypoint detectors and matchers, as well as RANSAC performance
+https://arxiv.org/pdf/2003.01587.pdf -> Comparisons of keypoint detectors and matchers, as well as RANSAC performance
 https://arxiv.org/abs/1904.00889.pdf -> Key.Net Keypoint detector (https://github.com/axelBarroso/Key.Net-Pytorch) (try it after SuperPoint)
 RANSAC algorithm: MAGSAC++ (implementation in OpenCV)
-MAGSAC: marginalizing sample consensus
 MAGSAC++, a fast, reliable and accurate robust estimator
 
-
 """
-# //============================================================================
 
 
-
-from scipy.linalg import expm
-# from GeometricEstimator import *
 from Drawer3D import *
 import plotly.graph_objs as go
 import plotly.io as pio
