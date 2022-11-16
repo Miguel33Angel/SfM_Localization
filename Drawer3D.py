@@ -34,9 +34,12 @@ def drawPoints(fig:go.Figure,pointArray:np.array,marker:dict):
     fig.add_trace(go.Scatter3d(x=x, y=y, z=z,
                                    mode='markers+text',
                                    marker=marker,
-                                   text=names,
                                    textposition="bottom center"))
-
+    # fig.add_trace(go.Scatter3d(x=x, y=y, z=z,
+    #                            mode='markers+text',
+    #                            marker=marker,
+    #                            text=names,
+    #                            textposition="bottom center"))
 
 def drawCamera(fig:go.Figure,T_w_c:np.array,):            
     """

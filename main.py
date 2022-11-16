@@ -19,9 +19,14 @@ from Drawer3D import *
 import plotly.graph_objs as go
 import plotly.io as pio
 import numpy as np
-import random
 import cv2
 
+import matplotlib.cm as cm
+import torch
+
+from models.matching import Matching
+from models.utils import (VideoStreamer, make_matching_plot_fast, frame2tensor)
+torch.set_grad_enabled(False) # For getting confidance with .numpy()
 
 
 def quaternion2Matrix(q):  # (w,x,y,z)
@@ -84,6 +89,26 @@ def triangulateFrom2View(x1, x2, K_c1, K_c2, T_c2_c1):
     return X_3D
 
 
+def sG_format_to_OpenCv(raw_matches,raw_keypoint_1,raw_keypoint_2,matches_confidence):
+    kpts_1 = cv2.KeyPoint_convert(raw_keypoint_1)
+    kpts_2 = cv2.KeyPoint_convert(raw_keypoint_2)
+
+    SuperGlue_matches = [0, 0, 0]
+    for i in range(0, raw_matches.shape[0]):
+        if (raw_matches[i] > -1 and raw_matches[i] < len(kpts_2)):
+            SuperGlue_matches = np.vstack((SuperGlue_matches, [i, raw_matches[i], 1 / matches_confidence[i]]))
+
+    # Delete first element
+    SuperGlue_matches = SuperGlue_matches[1:]
+
+    # Convert to dMatchesList
+    dMatchesList = []
+    for row in SuperGlue_matches:
+        dMatchesList.append(cv2.DMatch(_queryIdx=int(row[0]), _trainIdx=int(row[1]), _distance=row[2]))
+
+    return dMatchesList, kpts_1, kpts_2
+
+
 def main():
     np.set_printoptions(precision=4, linewidth=1024, suppress=True)
     # Camera Matrix and distortion coefs.
@@ -95,69 +120,80 @@ def main():
                   [0., 0., 1.]])
     dist = np.array([[-0.02331774, 0.25230237, 0., 0., -0.52186379]])
 
-    #Obtain the images ref_frame and frame1 from the video
+    # Hyperparameter of Ransac and fundamental estimation
+    MIN_MATCH_COUNT = 8 # We use a p8p algorithm, as it's the simplest
+
+    # Hyperparameters of SP and SG
+    # Hyperparameters of SuperGlue and SuperPoint. They are at the default.
+    config = {
+        'superpoint': {
+            'nms_radius': 4,
+            'keypoint_threshold': 0.005,
+            'max_keypoints': -1
+        },
+        'superglue': {
+            'weights': 'indoor',
+            'sinkhorn_iterations': 20,
+            'match_threshold': 0.2,
+        }
+    }
+    device = 'cpu'  # Compatibility with pretty much anything.
+    matching = Matching(config).eval().to(device)
+    keys = ['keypoints', 'scores', 'descriptors']
+
+
+    #Obtain the images ref_frame and next_frame from the video
     # TODO: use more than 2
     video_name = "secuencia_a_cam2.avi"
-    n = 0
-    incr_n = 5
     print("Trabajo con el video " + video_name)
 
-    vid = cv2.VideoCapture(video_name)  # "secuencia_a_cam2.avi"
-    ret, ref_frame = vid.read()
+    vs = VideoStreamer(video_name, [640, 480], 1, ['*.png', '*.jpg', '*.jpeg'], 1000000)
+    ref_frame, ret = vs.next_frame()
+    assert ret, 'Error when reading the first frame (try different --input?)'
 
+    # Process reference frame
+    frame_tensor = frame2tensor(ref_frame, device)
+    last_data = matching.superpoint({'image': frame_tensor})
+    last_data = {k + '0': last_data[k] for k in keys}
+    last_data['image0'] = frame_tensor
+    last_frame = ref_frame
+    last_image_id = 0
+
+    incr_n = 300
     n = 1
-    while vid.isOpened() and n < 300:
-        ret, frame = vid.read()
-
-        if n % incr_n == 0:
-
-            frame1 = frame
-            if frame1 is None:
-                print("La segunda imagen no es valida")
-                exit()
+    while True:
+        next_frame, ret = vs.next_frame()
+        # For now use only the 1st and
+        if (n % incr_n == 0) and ret:
+            break
+            # next_frame = frame
+        if not ret:
+            print("Finished reading")
+            break
         n = n + 1
-
+    print("Finished reading")
     # Undistort the images to reduce the reproyection error in the Ransac
-    ref_frame = cv2.undistort(ref_frame, K, dist)
-    frame1 = cv2.undistort(frame1, K, dist)
-
+    # ref_frame = cv2.undistort(ref_frame, K, dist)
+    # next_frame = cv2.undistort(next_frame, K, dist)
+    # Change how we obtain frames.
 
     # Extract the keypoints and obtain the good Matches
     # TODO: use SuperGlue + SuperPoint
-    max_points = 800
-    n_scale = 12
 
-    ORB = cv2.ORB_create(max_points, 1.2, n_scale)
-    kp1, des1 = ORB.detectAndCompute(ref_frame, None)
-    kp2, des2 = ORB.detectAndCompute(frame1, None)
+    # New Frame to a tensor:
+    frame_tensor = frame2tensor(next_frame, device)
+    pred = matching({**last_data, 'image1': frame_tensor})
+    kpts1 = last_data['keypoints0'][0].cpu().numpy()
+    kpts2 = pred['keypoints1'][0].cpu().numpy()
+    matches = pred['matches0'][0].cpu().numpy()
+    confidence = pred['matching_scores0'][0].cpu().numpy()
 
-    # NNDR matching.
-    NNDR_limit = 60
-    MIN_MATCH_COUNT = 10
+    # So now we have the kpts1 and kpts2 and the good matches as well in another format.
+    # Change the format to the one OpenCV uses:
+    good, kp1, kp2 = sG_format_to_OpenCv(matches,kpts1,kpts2,confidence)
 
-    FLANN_INDEX_LSH = 6
-    index_params = dict(algorithm=FLANN_INDEX_LSH,
-                        table_number=12,  # 12
-                        key_size=20,  # 20
-                        multi_probe_level=2)  # 2
-
-    search_params = dict(checks=100)  # or pass empty dictionary
-
-    flann = cv2.FlannBasedMatcher(index_params, search_params)
-    matches = flann.knnMatch(des1, des2, k=2)
-
-    good = []
-
-    for matchs in matches:  # Recorremos la lista accediendo a lista de matches
-        if len(matchs) == 2:
-            bestMatch = matchs[0]
-            worstMatch = matchs[1]
-            NNDR = bestMatch.distance / worstMatch.distance
-            # Criterio con sentido
-            if NNDR < NNDR_limit / 100:
-                good.append(bestMatch)
-
-    img3 = cv2.drawMatches(ref_frame, kp1, frame1, kp2, good, None)
+    # SuperGlue Gives -> good, kp1, kp2
+    img3 = cv2.drawMatches(ref_frame, kp1, next_frame, kp2, good, None)
     cv2.imshow("Matches", img3)
 
     if not len(good) > MIN_MATCH_COUNT:
