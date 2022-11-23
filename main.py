@@ -28,6 +28,7 @@ from models.matching import Matching
 from models.utils import (VideoStreamer, make_matching_plot_fast, frame2tensor)
 torch.set_grad_enabled(False) # For getting confidance with .numpy()
 
+import matplotlib.pyplot as plt
 
 def quaternion2Matrix(q):  # (w,x,y,z)
     R = np.array(
@@ -108,9 +109,99 @@ def sG_format_to_OpenCv(raw_matches,raw_keypoint_1,raw_keypoint_2,matches_confid
 
     return dMatchesList, kpts_1, kpts_2
 
+def getFundamentalFromMatches(x_1, x_2):
+    m = x_1.shape[1]
+    ones = np.array(np.ones((m))).T
+
+    x0 = x_1[0]
+    y0 = x_1[1]
+    x1 = x_2[0]
+    y1 = x_2[1]
+
+    A = np.vstack((x0 * x1, y0 * x1, x1, x0 * y1, y0 * y1, y1, x0, y0, ones)).T
+    # Now we need to solve a svd problem: A*f = 0
+    u, s, vh = np.linalg.svd(A)
+    f = vh[-1]
+    F_21 = np.array(f).reshape((3, 3))
+    # Force rank 2 for the F matrix
+    u2, s2, vh2 = np.linalg.svd(F_21)
+    s2[2] = 0
+    F_21 = u2 @ np.diag(s2) @ vh2
+
+    return F_21
+
+
+def getScoreFundamentalRANSAC(x1, x2, F, threshold):
+    l2_fromF = F @ x1
+    denom = np.sqrt(l2_fromF[0]*l2_fromF[0]+l2_fromF[1]*l2_fromF[1])
+    nom = np.abs(x2[0]*l2_fromF[0]+x2[1]*l2_fromF[1]+x2[2]*l2_fromF[2])
+    vector_err = np.abs(nom/denom)
+
+    inliers = (vector_err < threshold)
+    n_votes = inliers.sum()
+    # Get InliersMask
+    inliersMask = np.array([0 for k in range(x1.shape[1])])
+    inliersMask[inliers] = 1
+
+    return n_votes, inliersMask
+
+def getFundamentalFromMatchesRANSAC(x1, x2, ransacThreshold=2.0, maxIters=2000, pMinSet=8):
+    # ransacThreshold used to know its an inlier
+    # maxIters is number maximum of iterations before giving up on searching.
+    # pMinSet is used in case there aren't enough points to return a NULL.
+    print('Max iterations = ' + str(maxIters))
+    bestScore = 0
+    bestInliersMask = 0
+    bestF = 0
+    rng = np.random.default_rng()  # Inside we can put a seed
+    row, colum = x1.shape
+
+    for i in range(maxIters):
+        indexToCalculate = rng.integers(low=0, high=colum, size=pMinSet)
+        x1_subgroup = x1[:, indexToCalculate]
+        x2_subgroup = x2[:, indexToCalculate]
+        F = getFundamentalFromMatches(x1_subgroup, x2_subgroup)
+        score, inliersMask = getScoreFundamentalRANSAC(x1, x2, F, ransacThreshold)
+        if score > bestScore:
+            bestF = F
+            bestScore = score
+            bestIndexToCalculate = indexToCalculate
+            bestInliersMask = inliersMask
+
+    print("Score: " + str(bestScore))
+
+    # If there is not a minimum of points return null
+    if (bestScore < pMinSet):
+        print("Not enough points")
+        return None
+
+    # Convert index into a mask to draw it later.
+    bestPtsToCalcMask = np.array([0 for k in range(x1.shape[1])])
+    bestPtsToCalcMask[bestIndexToCalculate] = 1
+    return bestF, bestInliersMask, bestPtsToCalcMask
+
+def drawEpipolarLineFromPoint(x_1, F):
+    x_1_h = np.array([x_1]).T
+    l_2 = F @ x_1_h
+    # print("l_2")
+    # print(l_2)
+    a = l_2[0][0]
+    b = l_2[1][0]
+    c = l_2[2][0]
+    point_epipolar_cuts_y = (0, -c  / b)
+    if point_epipolar_cuts_y[1]>900:
+        point_epipolar_cuts_y = ( -(c+900*b)/a, 900)
+
+    point_epipolar_cuts_x = (-c/ a, 0)
+    if point_epipolar_cuts_x[0]>600:
+        point_epipolar_cuts_x = ( 600 , -(c+600*a)/b)
+
+    plt.axline(point_epipolar_cuts_y, point_epipolar_cuts_x, linestyle='-')
+    return point_epipolar_cuts_y,point_epipolar_cuts_x
+
 
 def main():
-    np.set_printoptions(precision=4, linewidth=1024, suppress=True)
+    np.set_printoptions(precision=8, linewidth=1024, suppress=True)
     # Camera Matrix and distortion coefs.
 
     # For now given
@@ -178,7 +269,6 @@ def main():
     # Change how we obtain frames.
 
     # Extract the keypoints and obtain the good Matches
-    # TODO: use SuperGlue + SuperPoint
 
     # New Frame to a tensor:
     frame_tensor = frame2tensor(next_frame, device)
@@ -215,11 +305,12 @@ def main():
 
     # From the points estimate the fundamentalMatrix F_21_est.
     # TODO: use MAGSAC++
-    F_21_est, mask = cv2.findFundamentalMat(open_pts1,open_pts2,cv2.FM_RANSAC, 3)
+    # F_21_est, mask = cv2.findFundamentalMat(open_pts1,open_pts2,cv2.FM_RANSAC, 3)
 
-    # Normalize the solution
-    F_21_est = F_21_est / F_21_est[2, 2]
-    F_12_est = F_21_est.T
+    # There's a custom RANSAC function coded as part of a course. It's slower but it works nonetheless.
+    x1 = np.vstack((open_pts1.T, np.ones((1, open_pts1.shape[0]))))
+    x2 = np.vstack((open_pts2.T, np.ones((1, open_pts2.shape[0]))))
+    F_21_est, _, _ = getFundamentalFromMatchesRANSAC(x1, x2, ransacThreshold=5, maxIters=20000, pMinSet=8)
 
     # Obtain the Essential Matrix and estimate the Rotation and translation using the function
     E_21 = K.T @ F_21_est @ K
@@ -246,6 +337,35 @@ def main():
     drawPoints(fig_triangulation, X3D_w_est, mark_est)
     pio.show(fig_triangulation)
     cv2.waitKey()
+
+    # Plot epipolar lines:
+    # If we have the matches and the inliers, then we can draw the epipolar lines on the second image
+
+
+    # plt.figure(3)
+    # plt.imshow(next_frame, cmap='gray', vmin=0, vmax=255)
+    # plt.title('Image 2')
+    # plt.draw()  # We update the figure display
+    #
+    # x1 = np.vstack((open_pts1.T, np.ones((1, open_pts1.shape[0]))))
+    # x2 = np.vstack((open_pts2.T, np.ones((1, open_pts2.shape[0]))))
+    #
+    # x1 = x1
+    # x2 = x2
+    #
+    # print(x2)
+    # print(x1)
+    # i = 0
+    # for x in x1.T:
+    #     if mask[i] == 1:
+    #         plt.plot(x2[0, i], x2[1, i], 'rx', markersize=10)
+    #         drawEpipolarLineFromPoint(x, F_12_est)
+    #     else:
+    #         plt.plot(x2[0, i], x2[1, i], 'bx', markersize=10)
+    #     i = i + 1
+    # print('Click in the image to continue...')
+    # plt.savefig("mygraph.png")
+
 
 
 if __name__ == '__main__':
