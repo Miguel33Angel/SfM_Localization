@@ -14,21 +14,19 @@ MAGSAC++, a fast, reliable and accurate robust estimator
 
 """
 
-
 from Drawer3D import *
 import plotly.graph_objs as go
 import plotly.io as pio
 import numpy as np
 import cv2
 
-import matplotlib.cm as cm
 import torch
 
 from models.matching import Matching
-from models.utils import (VideoStreamer, make_matching_plot_fast, frame2tensor)
-torch.set_grad_enabled(False) # For getting confidance with .numpy()
+from models.utils import (VideoStreamer, frame2tensor)
 
-import matplotlib.pyplot as plt
+torch.set_grad_enabled(False)  # For getting confidance with .numpy()
+
 
 def quaternion2Matrix(q):  # (w,x,y,z)
     R = np.array(
@@ -90,7 +88,7 @@ def triangulateFrom2View(x1, x2, K_c1, K_c2, T_c2_c1):
     return X_3D
 
 
-def sG_format_to_OpenCv(raw_matches,raw_keypoint_1,raw_keypoint_2,matches_confidence):
+def sG_format_to_OpenCv(raw_matches, raw_keypoint_1, raw_keypoint_2, matches_confidence):
     kpts_1 = cv2.KeyPoint_convert(raw_keypoint_1)
     kpts_2 = cv2.KeyPoint_convert(raw_keypoint_2)
 
@@ -108,6 +106,7 @@ def sG_format_to_OpenCv(raw_matches,raw_keypoint_1,raw_keypoint_2,matches_confid
         dMatchesList.append(cv2.DMatch(_queryIdx=int(row[0]), _trainIdx=int(row[1]), _distance=row[2]))
 
     return dMatchesList, kpts_1, kpts_2
+
 
 def getFundamentalFromMatches(x_1, x_2):
     m = x_1.shape[1]
@@ -133,9 +132,9 @@ def getFundamentalFromMatches(x_1, x_2):
 
 def getScoreFundamentalRANSAC(x1, x2, F, threshold):
     l2_fromF = F @ x1
-    denom = np.sqrt(l2_fromF[0]*l2_fromF[0]+l2_fromF[1]*l2_fromF[1])
-    nom = np.abs(x2[0]*l2_fromF[0]+x2[1]*l2_fromF[1]+x2[2]*l2_fromF[2])
-    vector_err = np.abs(nom/denom)
+    denom = np.sqrt(l2_fromF[0] * l2_fromF[0] + l2_fromF[1] * l2_fromF[1])
+    nom = np.abs(x2[0] * l2_fromF[0] + x2[1] * l2_fromF[1] + x2[2] * l2_fromF[2])
+    vector_err = np.abs(nom / denom)
 
     inliers = (vector_err < threshold)
     n_votes = inliers.sum()
@@ -145,6 +144,7 @@ def getScoreFundamentalRANSAC(x1, x2, F, threshold):
 
     return n_votes, inliersMask
 
+
 def getFundamentalFromMatchesRANSAC(x1, x2, ransacThreshold=2.0, maxIters=2000, pMinSet=8):
     # ransacThreshold used to know its an inlier
     # maxIters is number maximum of iterations before giving up on searching.
@@ -152,6 +152,7 @@ def getFundamentalFromMatchesRANSAC(x1, x2, ransacThreshold=2.0, maxIters=2000, 
     print('Max iterations = ' + str(maxIters))
     bestScore = 0
     bestInliersMask = 0
+    bestIndexToCalculate = 0
     bestF = 0
     rng = np.random.default_rng()  # Inside we can put a seed
     row, colum = x1.shape
@@ -171,7 +172,7 @@ def getFundamentalFromMatchesRANSAC(x1, x2, ransacThreshold=2.0, maxIters=2000, 
     print("Score: " + str(bestScore))
 
     # If there is not a minimum of points return null
-    if (bestScore < pMinSet):
+    if bestScore < pMinSet:
         print("Not enough points")
         return None
 
@@ -180,24 +181,23 @@ def getFundamentalFromMatchesRANSAC(x1, x2, ransacThreshold=2.0, maxIters=2000, 
     bestPtsToCalcMask[bestIndexToCalculate] = 1
     return bestF, bestInliersMask, bestPtsToCalcMask
 
+
 def drawEpipolarLineFromPoint(x_1, F):
     x_1_h = np.array([x_1]).T
     l_2 = F @ x_1_h
-    # print("l_2")
-    # print(l_2)
     a = l_2[0][0]
     b = l_2[1][0]
     c = l_2[2][0]
-    point_epipolar_cuts_y = (0, -c  / b)
-    if point_epipolar_cuts_y[1]>900:
-        point_epipolar_cuts_y = ( -(c+900*b)/a, 900)
+    point_epipolar_cuts_y = (0, -c / b)
+    if point_epipolar_cuts_y[1] > 900:
+        point_epipolar_cuts_y = (-(c + 900 * b) / a, 900)
 
-    point_epipolar_cuts_x = (-c/ a, 0)
-    if point_epipolar_cuts_x[0]>600:
-        point_epipolar_cuts_x = ( 600 , -(c+600*a)/b)
+    point_epipolar_cuts_x = (-c / a, 0)
+    if point_epipolar_cuts_x[0] > 600:
+        point_epipolar_cuts_x = (600, -(c + 600 * a) / b)
 
     plt.axline(point_epipolar_cuts_y, point_epipolar_cuts_x, linestyle='-')
-    return point_epipolar_cuts_y,point_epipolar_cuts_x
+    return point_epipolar_cuts_y, point_epipolar_cuts_x
 
 
 def main():
@@ -212,7 +212,7 @@ def main():
     dist = np.array([[-0.02331774, 0.25230237, 0., 0., -0.52186379]])
 
     # Hyperparameter of Ransac and fundamental estimation
-    MIN_MATCH_COUNT = 8 # We use a p8p algorithm, as it's the simplest
+    MIN_MATCH_COUNT = 8  # We use a p8p algorithm, as it's the simplest
 
     # Hyperparameters of SP and SG
     # Hyperparameters of SuperGlue and SuperPoint. They are at the default.
@@ -232,8 +232,7 @@ def main():
     matching = Matching(config).eval().to(device)
     keys = ['keypoints', 'scores', 'descriptors']
 
-
-    #Obtain the images ref_frame and next_frame from the video
+    # Obtain the images ref_frame and next_frame from the video
     # TODO: use more than 2
     video_name = "secuencia_a_cam2.avi"
     print("Trabajo con el video " + video_name)
@@ -280,7 +279,7 @@ def main():
 
     # So now we have the kpts1 and kpts2 and the good matches as well in another format.
     # Change the format to the one OpenCV uses:
-    good, kp1, kp2 = sG_format_to_OpenCv(matches,kpts1,kpts2,confidence)
+    good, kp1, kp2 = sG_format_to_OpenCv(matches, kpts1, kpts2, confidence)
 
     # SuperGlue Gives -> good, kp1, kp2
     img3 = cv2.drawMatches(ref_frame, kp1, next_frame, kp2, good, None)
@@ -324,7 +323,6 @@ def main():
     # TODO: Save 3d points for map. Use descriptors, or frames directly?
     X3D = triangulateFrom2View(open_pts1.T, open_pts2.T, K, K, T_21_est)
 
-
     # Plot the 3d Points and the two camera poses (The origin and the second camera pose estimated)
     T_12_est = np.linalg.inv(T_21_est)
     X3D_w_est = X3D
@@ -337,35 +335,6 @@ def main():
     drawPoints(fig_triangulation, X3D_w_est, mark_est)
     pio.show(fig_triangulation)
     cv2.waitKey()
-
-    # Plot epipolar lines:
-    # If we have the matches and the inliers, then we can draw the epipolar lines on the second image
-
-
-    # plt.figure(3)
-    # plt.imshow(next_frame, cmap='gray', vmin=0, vmax=255)
-    # plt.title('Image 2')
-    # plt.draw()  # We update the figure display
-    #
-    # x1 = np.vstack((open_pts1.T, np.ones((1, open_pts1.shape[0]))))
-    # x2 = np.vstack((open_pts2.T, np.ones((1, open_pts2.shape[0]))))
-    #
-    # x1 = x1
-    # x2 = x2
-    #
-    # print(x2)
-    # print(x1)
-    # i = 0
-    # for x in x1.T:
-    #     if mask[i] == 1:
-    #         plt.plot(x2[0, i], x2[1, i], 'rx', markersize=10)
-    #         drawEpipolarLineFromPoint(x, F_12_est)
-    #     else:
-    #         plt.plot(x2[0, i], x2[1, i], 'bx', markersize=10)
-    #     i = i + 1
-    # print('Click in the image to continue...')
-    # plt.savefig("mygraph.png")
-
 
 
 if __name__ == '__main__':
