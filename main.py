@@ -28,17 +28,6 @@ from models.utils import (VideoStreamer, frame2tensor)
 torch.set_grad_enabled(False)  # For getting confidance with .numpy()
 
 
-def quaternion2Matrix(q):  # (w,x,y,z)
-    R = np.array(
-        [[q[0] ** 2 + q[1] ** 2 - q[2] ** 2 - q[3] ** 2, 2 * (q[1] * q[2] - q[0] * q[3]),
-          2 * (q[1] * q[3] + q[0] * q[2])],
-         [2 * (q[2] * q[1] + q[0] * q[3]), q[0] ** 2 - q[1] ** 2 + q[2] ** 2 - q[3] ** 2,
-          2 * (q[2] * q[3] - q[0] * q[1])],
-         [2 * (q[3] * q[1] - q[0] * q[2]), 2 * (q[3] * q[2] + q[0] * q[1]),
-          q[0] ** 2 - q[1] ** 2 - q[2] ** 2 + q[3] ** 2]], dtype="object")
-    return R
-
-
 def triangulateFrom2View(x1, x2, K_c1, K_c2, T_c2_c1):
     """
     Triangulate the matches matched points between two views, the relative
@@ -107,7 +96,7 @@ def sG_format_to_OpenCv(raw_matches, raw_keypoint_1, raw_keypoint_2, matches_con
 
     return dMatchesList, kpts_1, kpts_2
 
-
+# Inneficient functions used for debugging or testing against opencv
 def getFundamentalFromMatches(x_1, x_2):
     m = x_1.shape[1]
     ones = np.array(np.ones((m))).T
@@ -262,10 +251,6 @@ def main():
             break
         n = n + 1
     print("Finished reading")
-    # Undistort the images to reduce the reproyection error in the Ransac
-    # ref_frame = cv2.undistort(ref_frame, K, dist)
-    # next_frame = cv2.undistort(next_frame, K, dist)
-    # Change how we obtain frames.
 
     # Extract the keypoints and obtain the good Matches
 
@@ -295,21 +280,17 @@ def main():
     open_pts2 = np.asarray(pts2)
 
     # First camera is set as the origin
-    p_RS_R_1, q_RS_R_1 = np.array([0., 0., 0.]), np.array([1., 0., 0., 0.])
-    R_RS_R_1 = quaternion2Matrix(q_RS_R_1)
-    T_RS_R_1 = np.eye(4)
-    T_RS_R_1[0:3, 0:3] = R_RS_R_1
-    T_RS_R_1[0:3, 3:4] = p_RS_R_1.reshape(3, 1)
-    T_AC1 = T_RS_R_1
+    T_AC1 = np.eye(4)
+
 
     # From the points estimate the fundamentalMatrix F_21_est.
     # TODO: use MAGSAC++
-    # F_21_est, mask = cv2.findFundamentalMat(open_pts1,open_pts2,cv2.FM_RANSAC, 3)
+    F_21_est, mask = cv2.findFundamentalMat(open_pts1,open_pts2,cv2.FM_RANSAC, 4)
 
     # There's a custom RANSAC function coded as part of a course. It's slower but it works nonetheless.
-    x1 = np.vstack((open_pts1.T, np.ones((1, open_pts1.shape[0]))))
-    x2 = np.vstack((open_pts2.T, np.ones((1, open_pts2.shape[0]))))
-    F_21_est, _, _ = getFundamentalFromMatchesRANSAC(x1, x2, ransacThreshold=5, maxIters=20000, pMinSet=8)
+    # x1 = np.vstack((open_pts1.T, np.ones((1, open_pts1.shape[0]))))
+    # x2 = np.vstack((open_pts2.T, np.ones((1, open_pts2.shape[0]))))
+    # F_21_est, _, _ = getFundamentalFromMatchesRANSAC(x1, x2, ransacThreshold=5, maxIters=20000, pMinSet=8)
 
     # Obtain the Essential Matrix and estimate the Rotation and translation using the function
     E_21 = K.T @ F_21_est @ K
