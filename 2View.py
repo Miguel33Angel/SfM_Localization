@@ -1,5 +1,5 @@
 # //
-# // Name        : main.py
+# // Name        : 2View.py
 # // Author      : Miguel Angel Calvera Casado
 # // Version     : V0.0
 # // Copyright   : Your copyright notice
@@ -14,9 +14,10 @@ MAGSAC++, a fast, reliable and accurate robust estimator
 
 """
 
-from Drawer3D import *
-import plotly.graph_objs as go
-import plotly.io as pio
+from Drawer3D_simple import *
+import matplotlib
+matplotlib.use('Qt5Agg')
+import matplotlib.pyplot as plt
 import numpy as np
 import cv2
 
@@ -305,17 +306,31 @@ def main():
     X3D = triangulateFrom2View(open_pts1.T, open_pts2.T, K, K, T_21_est)
 
     # Plot the 3d Points and the two camera poses (The origin and the second camera pose estimated)
-    T_12_est = np.linalg.inv(T_21_est)
-    X3D_w_est = X3D
-    T_w2_est = T_12_est
-    mark_est = dict(color='red', size=5)
-    fig_triangulation = go.Figure()
-    drawRefSystem(fig_triangulation, np.eye(4), "W")
-    drawCamera(fig_triangulation, T_AC1)
-    drawCamera(fig_triangulation, T_w2_est)
-    drawPoints(fig_triangulation, X3D_w_est, mark_est)
-    pio.show(fig_triangulation)
-    cv2.waitKey()
+    T_c1_w = np.eye(4, 4)
+    T_c2_w = np.linalg.inv(T_21_est)
+    X_w = X3D.T
+
+    fig3D = plt.figure(1)
+
+    ax = plt.axes(projection='3d', adjustable='box')
+    ax.set_xlabel('X')
+    ax.set_ylabel('Y')
+    ax.set_zlabel('Z')
+
+    drawRefSystem(ax, T_c1_w, '-', 'C1')
+    for i in range(init_n, last_n, 10):
+        # print(T_c2_w_dict[i])
+        drawRefSystem(ax, T_c2_w_dict[i], '-', '_' + str(n))
+
+    ax.scatter(X_w[0, :], X_w[1, :], X_w[2, :], marker='.')
+
+    # Matplotlib does not correctly manage the axis('equal')
+    xFakeBoundingBox = np.linspace(0, 4, 1)
+    yFakeBoundingBox = np.linspace(0, 4, 1)
+    zFakeBoundingBox = np.linspace(0, 4, 1)
+    plt.plot(xFakeBoundingBox, yFakeBoundingBox, zFakeBoundingBox, 'w.')
+    print('Close the figure to continue. Left button for orbit, right button for zoom.')
+    plt.show()
 
 
 if __name__ == '__main__':

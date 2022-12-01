@@ -1,5 +1,5 @@
 # //
-# // Name        : main.py
+# // Name        : 2View.py
 # // Author      : Miguel Angel Calvera Casado
 # // Version     : V0.0
 # // Copyright   : Your copyright notice
