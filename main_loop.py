@@ -1,5 +1,5 @@
 # //
-# // Name        : 2View.py
+# // Name        : main_loop.py
 # // Author      : Miguel Angel Calvera Casado
 # // Version     : V0.0
 # // Copyright   : Your copyright notice
@@ -13,23 +13,17 @@ RANSAC algorithm: MAGSAC++ (implementation in OpenCV)
 MAGSAC++, a fast, reliable and accurate robust estimator
 
 """
-# from Drawer3D import *
 from Drawer3D_simple import drawRefSystem, draw3DLine
-# import plotly.graph_objs as go
-# import plotly.io as pio
 import numpy as np
 import cv2
-
+import time
 import torch
 
 from models.matching import Matching
 from models.utils import (VideoStreamer, frame2tensor)
-
 torch.set_grad_enabled(False)  # For getting confidance with .numpy()
 
 # Plot 3d:
-from mpl_toolkits.mplot3d import Axes3D
-import sys
 import matplotlib
 matplotlib.use('Qt5Agg')
 import matplotlib.pyplot as plt
@@ -37,6 +31,8 @@ import matplotlib.pyplot as plt
 # Multiprocessing:
 # Naive way is using the built in multiprocessing module (not multithreading because of the GIL)
 from multiprocessing import Pool, Queue
+
+import json
 
 def triangulateFrom2View(x1, x2, K_c1, K_c2, T_c2_c1):
     """
@@ -48,13 +44,12 @@ def triangulateFrom2View(x1, x2, K_c1, K_c2, T_c2_c1):
         x2: 2xn matrix -> n 2D points in the image 2. Each i index is matched with the same indes in x1.
         K_c1: 3x3 matrix -> Camera 1 calibration matrix.
         K_c2: 3x3 matrix -> Camera 2 calibration matrix.
-        T_c2_c1 : 4x4 matrix -> Relative movenment between the camera 2 and camera 1.
+        T_c2_c1 : 4x4 matrix -> Relative movement between the camera 2 and camera 1.
     -output:
         X_3D: nx4 matrix -> n 3D points in the reference system of the camera 1.
     """
 
     P_c1 = np.hstack((K_c1, np.zeros((3, 1))))
-
     P_c2 = K_c2 @ np.eye(3, 4) @ T_c2_c1
 
     num_matches = x1.shape[1]
@@ -106,19 +101,21 @@ def sG_format_to_OpenCv(raw_matches, raw_keypoint_1, raw_keypoint_2, matches_con
 
     return dMatchesList, kpts_1, kpts_2
 
-
 def computeSfM2Views(matching, last_data, frame_tensor, K, ref_frame,next_frame, ransac_threshold=4, min_match=8):
+    # start = time.time()
     pred = matching({**last_data, 'image1': frame_tensor})
     kpts1 = last_data['keypoints0'][0].cpu().numpy()
     kpts2 = pred['keypoints1'][0].cpu().numpy()
     matches = pred['matches0'][0].cpu().numpy()
     confidence = pred['matching_scores0'][0].cpu().numpy()
+    # print("Time SP+SG: ", time.time() - start)
 
     # So now we have the kpts1 and kpts2 and the good matches as well in another format.
     # Change the format to the one OpenCV uses:
     good, kp1, kp2 = sG_format_to_OpenCv(matches, kpts1, kpts2, confidence)
 
     # SuperGlue Gives -> good, kp1, kp2
+    start = time.time()
     img3 = cv2.drawMatches(ref_frame, kp1, next_frame, kp2, good, None)
     cv2.imshow("Matches", img3)
     cv2.waitKey(1)
@@ -135,7 +132,8 @@ def computeSfM2Views(matching, last_data, frame_tensor, K, ref_frame,next_frame,
     # From the points estimate the fundamentalMatrix F_21_est.
     # TODO: use MAGSAC++
     F_21_est, mask = cv2.findFundamentalMat(open_pts1, open_pts2, cv2.FM_RANSAC, ransac_threshold)
-
+    print("Ransac inliers/SG matches", np.sum(mask)/len(good))
+    print("SG matches/SP keypoints:", len(good) / len(kpts1))
     # Obtain the Essential Matrix and estimate the Rotation and translation using the function
     E_21 = K.T @ F_21_est @ K
 
@@ -144,114 +142,107 @@ def computeSfM2Views(matching, last_data, frame_tensor, K, ref_frame,next_frame,
     T_21_est = np.eye(4, 4)
     T_21_est[0:3, 0:3] = R
     T_21_est[0:3, 3] = t.reshape(3)
-
+    # print("Time Cfm: ",time.time()-start)
     return open_pts1, open_pts2, T_21_est
-
-# To do multiprocessing:
 
 def main():
     np.set_printoptions(precision=8, linewidth=1024, suppress=True)
-    # Camera Matrix and distortion coefs.
 
-    # For now given
-    # TODO: create a guess and refine it with more images.
-    K = np.array([[641.84180665, 0., 311.13895719],
-                  [0., 641.17105466, 244.65756186],
-                  [0., 0., 1.]])
-    dist = np.array([[-0.02331774, 0.25230237, 0., 0., -0.52186379]])
+    image_width, image_height = 640, 480
 
-    # Hyperparameter of Ransac and fundamental estimation
-    MIN_MATCH_COUNT = 8  # We use a p8p algorithm, as it's the simplest
+    # Get config from JSON file:
+    with open('config_vo.txt', 'r') as convert_file:
+        config_vo = json.loads(convert_file.read())
 
-    # Hyperparameters of SP and SG
-    # Hyperparameters of SuperGlue and SuperPoint. They are at the default.
-    config = {
-        'superpoint': {
-            'nms_radius': 4,
-            'keypoint_threshold': 0.005,
-            'max_keypoints': -1
-        },
-        'superglue': {
-            'weights': 'indoor',
-            'sinkhorn_iterations': 20,
-            'match_threshold': 0.2,
-        }
-    }
+    K = np.array(config_vo["K"])
+    dist = np.array(config_vo["dist"])
+    sp_sg_config = config_vo["sp_sg_config"]
+
     # Compatibility with pretty much anything.
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    matching = Matching(config).eval().to(device)
     keys = ['keypoints', 'scores', 'descriptors']
+    matching = Matching(sp_sg_config).eval().to(device)
 
-    # Obtain the images ref_frame and next_frame from the video
-    # TODO: use more than 2
+    # Obtain the images from the video
     video_name = "secuencia_a_cam2.avi"
     print("Trabajo con el video " + video_name)
 
     # Create capture object with the file:
     cap = cv2.VideoCapture(video_name)
     cap.set(cv2.CAP_PROP_BUFFERSIZE, 4) #Set buffer at 4 as it's more than enough
-    w, h = 640, 480 # Image size
 
     # Get frame_
     n = 0
     cap.set(cv2.CAP_PROP_POS_FRAMES, n)
-    ret, ref_frame = cap.read()
-    ref_frame = cv2.resize(ref_frame, (w, h), cv2.INTER_AREA)
-    ref_frame = cv2.cvtColor(ref_frame, cv2.COLOR_RGB2GRAY)
+    ret, ref_frame_raw = cap.read()
+    ref_frame_color = cv2.resize(ref_frame_raw, (image_width, image_height), cv2.INTER_AREA)
+    ref_frame = cv2.cvtColor(ref_frame_color, cv2.COLOR_RGB2GRAY)
 
     assert ret, 'Error when reading the first frame (try different --input?)'
 
     # Process reference frame
-    frame_tensor = frame2tensor(ref_frame, device)
-    last_data = matching.superpoint({'image': frame_tensor})
+    frame_tensor_ref = frame2tensor(ref_frame, device)
+    last_data = matching.superpoint({'image': frame_tensor_ref})
     last_data = {k + '0': last_data[k] for k in keys}
-    last_data['image0'] = frame_tensor
-    last_frame = ref_frame
-    last_image_id = 0
+    last_data['image0'] = frame_tensor_ref
 
     # For showing all the camera positions
     T_c2_w_dict = dict()
+    T_c1_w = np.array([[0, 1, 0, 0],
+                       [0, 0, 1, 0],
+                       [1, 0, 0, 0],
+                       [0, 0, 0, 1]])
+
 
     # TODO: make loop which gets frames until transformation is one that makes sense.
-    last_n = 350   # 350
-    init_n = 200   # 200 # Skip to this frame
+    last_n = 350
+    init_n = 200  # Skip to this frame
     n = init_n
-    while True:
+    cap.set(cv2.CAP_PROP_POS_FRAMES, n)
+    while n <= last_n:
+        start_time = time.time()
         cap.set(cv2.CAP_PROP_POS_FRAMES, n)
         ret, next_frame = cap.read()
         if not ret:
             print("Finished reading")
             break
-        if (n >= last_n):
-            break
-
-        next_frame = cv2.resize(next_frame, (w, h), cv2.INTER_AREA)
+        print("n",n)
+        next_frame = cv2.resize(next_frame, (image_width, image_height), cv2.INTER_AREA)
         next_frame = cv2.cvtColor(next_frame, cv2.COLOR_RGB2GRAY)
-
 
         # New Frame to a tensor:
         frame_tensor = frame2tensor(next_frame, device)
 
         # SfM2Views:
-        open_pts1, open_pts2, T_21_est = computeSfM2Views(matching, last_data, frame_tensor, K, ref_frame,next_frame, ransac_threshold=4,
-                                                          min_match=MIN_MATCH_COUNT)
+        out = computeSfM2Views(matching, last_data, frame_tensor, K, ref_frame,next_frame, ransac_threshold=4,
+                                                          min_match=8)
+
+        if out == None:
+            break
+
+        open_pts1, open_pts2, T_21_est = out
+
         # Get 3d of points.
         # TODO: Extend to SLAM as another project
         X3D = triangulateFrom2View(open_pts1.T, open_pts2.T, K, K, T_21_est)
 
         # TODO: Bundle adjustment from previous views and actual view.
-
         # Save T_c2_w.
-        T_c2_w_dict[n] = np.linalg.inv(T_21_est)
+        T_c2_w_dict[n] = np.linalg.inv(T_21_est @ T_c1_w)
+        print("FPS: ",(1/(time.time()-start_time)))
+        n = n + 1
 
-        # Here show the results or put them in memory to show them later.
-        print(str(n)+" Done")
-        n = n + 10  # Skip 5 frames each time, as there's no time for all of them.
+
     print("Finished reading")
+    print("T_c2_w")
+    print(T_c2_w_dict[30])
+
 
 
     # Plot the 3d Points and the two camera poses (The origin and the second camera pose estimated)
     T_c1_w = np.eye(4, 4)
+
+
     X_w = X3D.T
 
     fig3D = plt.figure(1)
@@ -262,9 +253,8 @@ def main():
     ax.set_zlabel('Z')
 
     drawRefSystem(ax, T_c1_w, '-', 'C1')
-    for i in range(init_n,last_n,10):
-        # print(T_c2_w_dict[i])
-        drawRefSystem(ax, T_c2_w_dict[i], '-', '_'+str(n))
+    for i in range(init_n,last_n,1):
+        drawRefSystem(ax,T_c2_w_dict[i] , '-', '_'+str(i))
 
     ax.scatter(X_w[0, :], X_w[1, :], X_w[2, :], marker='.')
 
