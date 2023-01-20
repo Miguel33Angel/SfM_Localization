@@ -1,0 +1,1 @@
+{"K": [[641.84180665, 0.0, 311.13895719], [0.0, 641.17105466, 244.65756186], [0.0, 0.0, 1.0]], "dist": [[-0.02331774, 0.25230237, 0.0, 0.0, -0.52186379]], "config_sp_sg": {"superpoint": {"nms_radius": 4, "keypoint_threshold": 0.005, "max_keypoints": -1}, "superglue": {"weights": "indoor", "sinkhorn_iterations": 20, "match_threshold": 0.2}}}
